@@ -1,0 +1,387 @@
+---
+title: "Equity Strive Capital (ESC) Risk Management"
+author: "Tafara Moyo"
+format: pdf
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+## 1. Introduction
+
+The project aims to develop a Value-at-Risk model that estimates the
+maximum potential loss in a portfolio with equal investment in top 5
+performing stocks from 2020 to date.The major is is to try to see if the
+current upward movement in stock prices is sustainable or just the
+beginning of th end and if the portfolio is at risk of losing value.
+This study will assume a a factious portfolio called Equity Strive
+Capital. The portfolio will be made up of the following stocks: Google
+(GOOGL), Apple (AAPL), Microsoft (MSFT), Amazon (AMZN), and Nvidia
+(NVDA).
+
+## 2. Rational for the study
+
+The project is inspired by the following needs:
+
+**Market Analysis:** Investigate whether the recent upward trend in
+stock prices, particularly in the technology sector, represents a stable
+growth opportunity or signals an impending downturn. Can an all tech
+portfolio be profitable from this?
+
+***Risk Management:*** Utilize VaR to quantify potential losses in the
+portfolio, aiding in informed decision-making about risk exposure amidst
+market volatility.
+
+## 3. Objectives
+
+The objectives of this study are as follows:
+
+1.  To develop a VaR model from 5 best performing tech stocks
+
+2.  To come up with insights on how to manage risk in 2024.
+
+## 4. Methods
+
+The study will be conducted in the following steps:
+
+1.  Data Collection: Gather historical price data for 5 top-performing
+    assets.
+
+2.  Data Pre-processing: Clean and preprocess both financial and
+    sentiment data, ensuring alignment for analysis.
+
+3.  VaR Model Development: Explore and implement various VaR methods
+    historical simulation, Monte Carlo simulations.
+
+4.  Insights and Recommendations: Provide insights and recommendations
+    based on the VaR model results.
+
+## 5. Set Up
+
+------------------------------------------------------------------------
+
+The following libraries will be used for the project:
+
+```{r}
+suppressMessages({
+  library(quantmod)
+  library(TTR)
+  library(ggplot2)
+  library(dplyr)
+  library(tidyr)
+  library(glue)
+  library(httr)
+  library(RJSONIO)
+  library(purrr)
+  library(reshape2)
+})
+```
+
+### Data Collection
+
+------------------------------------------------------------------------
+
+**Collecting Stock prices data**
+
+The data will be collected from Alpha Vantage API, which provides
+historical stock prices and other financial data. The following code
+fetches weekly stock prices for the top-performing assets (e.g., GOOGL,
+AAPL, MSFT, AMZN, NVDA) using the AlphaVantage API.These stocs are part
+of the magnificent seven stocks and offer very good returns in the
+market and are very liquid.
+
+```{r}
+##Fetching the top performing stocks
+fetch_top_performing_stocks <- function(api_key, symbol) {
+ base_url <- "https://www.alphavantage.co/query?function=TIME_SERIES_WEEKLY&symbol={symbol}&apikey={api_key}"
+  url <- glue(base_url, api_key = api_key, symbol = symbol)
+  response <- httr::GET(url[1])
+  content <- httr::content(response, "text")
+  data <- RJSONIO::fromJSON(content)
+ 
+  if (is.null(data$`Weekly Time Series`)) {
+    return(data.frame(Date = as.Date(character()), Weekly_Return = numeric(), Symbol = symbol))
+  }
+ 
+  weekly_series <- data$`Weekly Time Series`
+  dates <- names(weekly_series)
+  prices <- purrr::map_dbl(dates, ~as.numeric(weekly_series[[.x]][4]))
+  returns <- c(NA, diff(log(prices)))
+ 
+  data.frame(Date = as.Date(dates), Weekly_Return = returns, Symbol = symbol)
+ 
+}
+
+api_key <- "1U1APZAOHQ6NU9YS"
+symbols <- c("GOOGL", "AAPL", "MSFT", "AMZN", "NVDA")
+
+output <- lapply(symbols, function(x) fetch_top_performing_stocks(api_key, x))
+```
+
+Since the API call is limited, l will save the data into csv files for
+future use. Avoiding to exhaust the 25 daily cap.
+
+```{r}
+##Saving my data into seperate dataframes
+for (i in 1:length(output)) {
+  df <- output[[i]]
+  symbol <- df$Symbol[1]
+  filename <- paste(symbol, "weekly_returns.csv", sep = "_")
+  write.csv(df, filename, row.names = FALSE)
+}
+
+```
+
+***Reloading the data from the csv files***
+
+```{r}
+GOOGL <- read.csv("~/Downloads/Stocks/GOOGL_weekly_returns.csv")
+AAPL <- read.csv("~/Downloads/Stocks/AAPL_weekly_returns.csv")
+MSFT <- read.csv("~/Downloads/Stocks/MSFT_weekly_returns.csv")
+AMZN <- read.csv("~/Downloads/Stocks/AMZN_weekly_returns.csv")
+NVDA <- read.csv("~/Downloads/Stocks/NVDA_weekly_returns.csv")
+```
+
+### Data Pre-processing
+
+Here l want to check the structure of my data and see if l need to make
+any changes to it. I will also combine my data into a portfolio return
+data frame and then calculate the weekly returns to enable further
+calculations.
+
+```{r}
+#Just checking the structure of my data to see if l need to make any changes
+str(GOOGL)
+str(AAPL)
+str(MSFT)
+str(AMZN)
+str(NVDA)
+```
+
+```{r}
+
+# Combining data frames and ensuring 'Date' column is in Date format
+all_stocks <- bind_rows(GOOGL, AAPL, MSFT, AMZN, NVDA) %>%
+  mutate(Date = as.Date(Date)) %>%
+  filter(Date >= as.Date("2020-01-01")) 
+
+# Removing rows with NA values (assuming you want to check all columns)
+all_stocks <- na.omit(all_stocks)
+
+#### Combining this into one Data Frame of portfolio return
+
+portfolio_weekly_returns <- all_stocks %>%
+  group_by(Date) %>%
+  summarise(Weekly_Return = mean(Weekly_Return, na.rm = TRUE))
+#Now l have a data frame for the eman return of the portfolio from 2020 
+```
+
+## 6. Calculations
+
+**Value at Risk (VaR)**
+
+Value at Risk (VaR) is a risk management tool that calculates, at a
+particular confidence level, the maximum expected loss of an investment
+portfolio over a specific period of time.The query "What is the maximum
+amount I could lose with a given probability over a certain period?" is
+answered by it. VaR is well-liked because it makes risk exposure to both
+technical and non-technical stakeholders clear and simple to understand.
+The following code calculates VaR for Stewards Portfolio
+
+```{r}
+confidence_level <- 0.05  # 95% confidence level
+
+# Calculate Historical VaR
+historical_VaR_portfolio <- quantile(portfolio_weekly_returns$Weekly_Return, confidence_level, na.rm = TRUE)
+
+historical_VaR_portfolio
+```
+
+There is a 95% confidence level that the maximum potential loss over the
+specified time period will not exceed -7.36% of the portfolio. In
+simpler terms, it suggests that in 95 out of 100 scenarios, the
+portfolio's loss would not be worse than 7.36%, reflecting the
+portfolio's risk exposure under normal market conditions.
+
+**Monte Carlo Simulation**
+
+Monte Carlo Simulation is used to simulate the likelihood of various
+outcomes in a process that is difficult to predict because of the
+influence of random factors. It is extensively utilized for risk
+assessment using random sampling to produce numerical data, the method
+entails running a large number of simulations to generate alternative
+outcomes for a random process.
+
+```{r}
+set.seed(123)  # For reproducibility
+n_simulations <- 10000
+n_days <- 5  # Assuming 5 trading days in a week
+
+mean_return <- mean(portfolio_weekly_returns$Weekly_Return, na.rm = TRUE)
+std_return <- sd(portfolio_weekly_returns$Weekly_Return, na.rm = TRUE)
+
+# Simulate weekly returns
+simulated_returns <- replicate(n_simulations, sum(rnorm(n_days, mean_return / n_days, std_return / sqrt(n_days))))
+
+# Calculate Monte Carlo VaR
+monte_carlo_VaR_portfolio <- quantile(simulated_returns, confidence_level)
+print(monte_carlo_VaR_portfolio)
+```
+
+Therefore, the Value at Risk (VaR) calculation indicates that, with a
+95% confidence level, the maximum expected loss for the Stewards
+Portfolio over the specified period is -12.29%. This means there is a
+95% probability that the portfolio will not lose more than 12.29% of its
+value in the given timeframe, according to the scenarios generated by
+the Monte Carlo simulation.
+
+**VaR Comparison Visualization**
+
+```{r}
+# Combine VaR values into a data frame for plotting
+var_values <- data.frame(Type = c("Historical VaR", "Monte Carlo VaR"),
+                         VaR = c(historical_VaR_portfolio, monte_carlo_VaR_portfolio))
+
+ggplot(var_values, aes(x = Type, y = VaR, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(title = "Portfolio Value at Risk (VaR) Since 2020", x = "", y = "Value at Risk") +
+  scale_fill_brewer(palette = "Pastel1")
+
+```
+
+From the above chart, we can see that the Monte Carlo VaR estimate is
+higher than the Historical VaR estimate, indicating a higher potential
+loss for the portfolio. This suggests that the Monte Carlo simulation,
+which accounts for a wider range of potential outcomes, is more
+conservative in its risk assessment compared to the Historical VaR
+method.
+
+------------------------------------------------------------------------
+
+**Portfolio Performance Visualization**
+
+The following visualizations will be used to assess the performance of
+the Equity Strive Capital Portfolio since 2020.
+
+```{r}
+
+ggplot(portfolio_weekly_returns, aes(x = Date, y = Weekly_Return)) +
+  geom_line() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Portfolio Weekly Returns Over Time", x = "Date", y = "Weekly Return (%)") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+```
+
+We can see that we the portfolio has been having more losses than gains
+since 2020. This is a clear indication that the portfolio is at risk of
+losing value.
+
+**Cumulative Returns Plot**
+
+```{r}
+
+portfolio_weekly_returns$Adjusted_Return = portfolio_weekly_returns$Weekly_Return / 100 + 1
+
+# Calculate Cumulative Return
+portfolio_weekly_returns$Cumulative_Return = cumprod(portfolio_weekly_returns$Adjusted_Return)
+
+ggplot(portfolio_weekly_returns, aes(x = Date, y = Cumulative_Return)) +
+  geom_line(color = "red") + # Change to "blue" for a blue line
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Portfolio Cumulative Returns Over Time", x = "Date", y = "Cumulative Return (%)") +
+  theme_minimal() +
+  theme(panel.background = element_rect(fill = "black", colour = "black"),
+        plot.background = element_rect(fill = "black", colour = "black"),
+        text = element_text(color = "white"),
+        axis.text = element_text(color = "white"),
+        axis.title = element_text(color = "white"),
+        panel.grid.major = element_blank(),  # Remove major gridlines
+        panel.grid.minor = element_blank(),  # Remove minor gridlines
+        plot.title = element_text(hjust = 0.5, color = "white"))
+
+
+```
+
+The portolio has been having cumulative gains in 2023 but this has been
+drastically falling since about mid-2023. This is a clear indication
+that the portfolio is at risk of losing value.
+
+**Correlation Analysis**
+
+```{r}
+
+returns_by_symbol <- all_stocks %>%
+  select(Date, Symbol, Weekly_Return) %>%
+  spread(Symbol, Weekly_Return)
+
+cor_matrix <- cor(returns_by_symbol[, -1], use = "complete.obs")
+
+ggplot(data = melt(cor_matrix), aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
+  labs(title = "Correlation Matrix of Portfolio Stocks", x = "Stock", y = "Stock") +
+  theme_minimal()
+
+```
+
+Most of these stocks belong in the consumer technology sector and are
+highly correlated. This means that they are likely to move in the same
+direction. This is a clear indication that the portfolio is at risk of
+losing value and confirms the fall in returns shown before.
+
+## 7. Conclusions
+
+**1. Portfolio Diversification:** To mitigate risk associated with the
+uniform direction of tech stock movements, diversify the portfolio by
+incorporating non-tech sectors\
+**2. Alternative data:** Leverage alternative data sources to uncover
+unique investment opportunities and enhance portfolio decision-making
+beyond traditional market indicators.
+
+## 8. Resources
+
+For further understanding of these concepts, the following resources
+were used:
+
+1\. [Why Log Returns -
+Quantivity](https://quantivity.wordpress.com/2011/02/21/why-log-returns/)
+
+2\. [Value at Risk -
+Investopedia](http://www.investopedia.com/terms/v/var.asp)
+
+3\. [Approaches to VaR -
+Stanford](https://web.stanford.edu/class/msande444/2012/MS&E444_2012_Group2a.pdf)
+
+4\. [Uniform Distribution -
+R](https://stat.ethz.ch/R-manual/R-devel/library/stats/html/Uniform.html)
+
+5\. [Monte Carlo Method in R - alookanalytics
+blog](https://blog.alookanalytics.com/2017/04/26/monte-carlo-method-in-r/)
+
+6\. [Calculating VaR with R -
+R-Bloggers](https://www.r-bloggers.com/calculating-var-with-r/)
+
+7\. [Monte Carlo Package -
+R](https://cran.r-project.org/web/packages/MonteCarlo/MonteCarlo.pdf)
+
+8\. [Fixed Income Risk: Calculating Value at Risk (VaR) for
+Bonds](https://financetrainingcourse.com/education/2013/05/bond-risk-calculating-value-at-risk-var-for-bonds/)
+
+9\. [Portfolio & Risk Analytics - Bloomberg
+Terminal](https://www.bloomberg.com/professional/product/portfolio-risk-analytics/)
+
+10\. [Risk Management for Fixed Income Portfolios - Credit
+Suisse](https://www.credit-suisse.com/media/am/docs/asset_management/events/2014/fits2014-program/3-5-2-traband-risk-management.pdf)
+
+11\. [Fixed Income VaR - Krzysztof
+Ostaszewski](https://math.illinoisstate.edu/krzysio/MAT483/ValueAtRisk.pdf)
+
+12\. [Manipulating Time Series Data in R with xts & zoo -
+RPubs](https://rpubs.com/mohammadshadan/288218)
+```{r}
+
+```
+
